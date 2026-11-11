@@ -1,0 +1,211 @@
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">∿</span><div><strong>PQM</strong><small>POWER QUALITY</small></div></div>
+    <nav aria-label="Hauptnavigation">
+      <button class="nav-item" [class.active]="activeView() === 'dashboard'" type="button" (click)="openView('dashboard')"><span>⌁</span> Live-Dashboard</button>
+      <button class="nav-item" [class.active]="activeView() === 'configuration'" type="button" (click)="openView('configuration')"><span>⚙</span> API-Konfiguration</button>
+    </nav>
+    <div class="side-note">
+      <span class="pulse-dot"></span>
+      <div><strong>Live-Erfassung</strong><small>REST · Cursor-gesichert</small></div>
+    </div>
+  </aside>
+
+  <main id="live">
+    @if (activeView() === 'dashboard') {
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">PQM / ECHTZEITÜBERWACHUNG</div>
+        <h1>Live-Dashboard</h1>
+      </div>
+      <div class="header-actions">
+        <div class="time-block"><strong>{{ formatTime(store.state()?.serverTime) }}</strong><small>Serverzeit · Demo</small></div>
+        <div class="range-switcher" aria-label="Zeitraum auswählen">
+          @for (mode of rangeModes; track mode) {
+            <button type="button" [class.active]="store.rangeMode() === mode" (click)="store.setRange(mode)">{{ rangeConfig[mode].label }}</button>
+          }
+        </div>
+        <select class="meter-select" aria-label="Messgerät auswählen"><option>{{ liveConfig.config().meterId }}</option></select>
+        <button class="pause-button" type="button" [disabled]="store.rangeMode() !== 'live'" (click)="store.togglePause()">
+          {{ store.paused() ? '▶ Live fortsetzen' : 'Ⅱ Anzeige pausieren' }}
+        </button>
+      </div>
+    </header>
+
+    <section class="control-strip" aria-label="Live-Verbindung und Polling">
+      <div class="connection-status" [class.error]="store.state()?.connection === 'error'">
+        <span class="status-light"></span>
+        <div><strong>{{ store.state()?.connection === 'online' ? 'REST-Verbindung aktiv' : 'Verbindung wird aufgebaut' }}</strong><small>Cursor {{ store.state()?.cursor ?? '–' }} · Sequenz {{ store.state()?.lastSequence ?? '–' }}</small></div>
+      </div>
+
+      <form class="polling-control" (ngSubmit)="applyPollingRate()">
+        <label for="polling-rate">Pollingrate</label>
+        <div class="input-unit">
+          <input id="polling-rate" name="pollingRate" type="number" min="0.5" max="30" step="0.5" [disabled]="store.rangeMode() !== 'live'" [(ngModel)]="pollingSeconds" aria-describedby="polling-hint polling-error" />
+          <span>s</span>
+        </div>
+        <button type="submit" [disabled]="store.rangeMode() !== 'live'">Übernehmen</button>
+        <span class="active-rate">{{ store.rangeMode() === 'live' ? 'REST · alle ' + formatRate(store.pollingRateMs()) + ' s' : 'Snapshot · ' + rangeConfig[store.rangeMode()].label }}</span>
+        <small id="polling-hint">{{ store.rangeMode() === 'live' ? 'Abrufintervall, nicht Messauflösung' : 'Historischer Snapshot ohne Messwertaktualisierung' }}</small>
+        @if (pollingValidation) { <small id="polling-error" class="validation">{{ pollingValidation }}</small> }
+      </form>
+
+    </section>
+
+    @if (store.state()?.errorMessage; as error) {
+      <div class="error-banner">{{ error }} <button type="button" (click)="store.reload()">Neu verbinden</button></div>
+    }
+    @if (store.paused()) {
+      <div class="pause-banner">Anzeige pausiert · Die REST-Erfassung und der Cursor laufen im Hintergrund weiter.</div>
+    }
+
+    <section class="kpis" aria-label="Aktuelle Kennzahlen">
+      <article><span>Spannung L1</span><strong>{{ phaseVoltage('L1').toFixed(1) }} <small>V</small></strong><em>● im Livefenster</em></article>
+      <article><span>Frequenz</span><strong>{{ (store.state()?.voltage?.at(-1)?.frequencyHz ?? 0).toFixed(3) }} <small>Hz</small></strong><em>vom Messgerät übergeben</em></article>
+      <article><span>THDS max.</span><strong>{{ latestThds().toFixed(2) }} <small>%</small></strong><em>{{ thdsPhase() === 'ALL' ? 'L1 · L2 · L3' : thdsPhase() }}</em></article>
+      <article><span>Unsymmetrie</span><strong>{{ (store.latestUnbalance()?.negativePercent ?? 0).toFixed(2) }} <small>%</small></strong><em>Gegensystem</em></article>
+      <article><span>PQ-Ereignisse</span><strong>{{ filteredEvents().length }}</strong><em>{{ rangeConfig[store.rangeMode()].label }}</em></article>
+    </section>
+
+    <section class="panel wide">
+      <div class="panel-head">
+        <div><span class="panel-number">1</span><div><h2>Dreiphasiger Spannungsverlauf</h2><p>Mittelwert mit Min/Max-Band · L1/L2/L3 · Udin und Grenzwerte</p></div></div>
+        <div class="panel-actions"><span class="badge">{{ rangeConfig[store.rangeMode()].label }}</span><button class="detail-button" type="button" (click)="showDetail.set(true)">Detailanalyse →</button></div>
+      </div>
+      <pqm-echart class="chart voltage-chart" [option]="voltageOption()" ariaLabel="Zeitlicher Verlauf der dreiphasigen RMS-Spannung" />
+    </section>
+
+    <div class="dashboard-grid">
+      <section class="panel events-panel">
+        <div class="panel-head">
+          <div><span class="panel-number">2</span><div><h2>Power-Quality-Ereignisse</h2><p>Kreis L1 · Raute L2 · Dreieck L3 · Leiterzahl im Symbol</p></div></div>
+          <div class="panel-actions">
+            <span class="badge amber">Erkannt</span>
+            <select aria-label="Ereignisphase" [ngModel]="eventPhase()" (ngModelChange)="eventPhase.set($event)">
+              <option value="ALL">Alle Phasen</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option>
+            </select>
+            <select aria-label="Ereignistyp" [ngModel]="eventType()" (ngModelChange)="eventType.set($event)">
+              <option value="ALL">Alle Typen</option>
+              @for (type of eventTypes; track type) { <option [value]="type">{{ type }}</option> }
+            </select>
+          </div>
+        </div>
+        <pqm-echart class="chart event-chart" [option]="eventOption()" ariaLabel="Ereignisse nach Typ und Zeit" />
+        <div class="event-counts">
+          <div><span>Voltage Dip</span><strong>{{ count('Voltage Dip') }}</strong></div>
+          <div><span>Voltage Swell</span><strong>{{ count('Voltage Swell') }}</strong></div>
+          <div><span>Interruption</span><strong>{{ count('Voltage Interruption') }}</strong></div>
+          <div><span>RVC</span><strong>{{ count('Rapid Voltage Change') }}</strong></div>
+          <div><span>Transient</span><strong>{{ count('Spannungstransient') }}</strong></div>
+        </div>
+      </section>
+
+      <section class="panel quality-panel">
+        <div class="panel-head">
+          <div><span class="panel-number">3</span><div><h2>THDS und Netzqualitätskennzahlen</h2><p>Frequenz · Pst · Plt · Langzeit-RMS</p></div></div>
+          <span class="badge">{{ rangeConfig[store.rangeMode()].label }}</span>
+        </div>
+        <div class="quality-content">
+          <div class="quality-chart">
+            <div class="subchart-head"><strong>Spannungs-THDS</strong><select aria-label="THDS-Phase" [ngModel]="thdsPhase()" (ngModelChange)="thdsPhase.set($event)"><option value="ALL">Alle Phasen</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option></select></div>
+            <pqm-echart class="chart" [option]="thdsOption()" ariaLabel="Zeitverlauf des Spannungs-THDS" />
+          </div>
+          <div class="quality-chart">
+            <div class="subchart-head"><strong>Netzqualitätskennzahl</strong><select aria-label="Netzqualitätskennzahl" [ngModel]="qualityMetric()" (ngModelChange)="qualityMetric.set($event)">@for (metric of qualityMetrics; track metric.value) { <option [value]="metric.value">{{ metric.label }}</option> }</select></div>
+            <pqm-echart class="chart" [option]="qualityOption()" ariaLabel="Zeitlicher Verlauf der ausgewählten Netzqualitätskennzahl" />
+          </div>
+        </div>
+      </section>
+
+      <section class="panel unbalance-panel">
+        <div class="panel-head">
+          <div><span class="panel-number">4</span><div><h2>Unsymmetrie</h2><p>Zeigerbild plus zeitlicher Verlauf der Komponenten</p></div></div>
+          <span class="badge purple">Zeigerdiagramm</span>
+        </div>
+        <div class="unbalance-content">
+          <div class="phasor-wrap">
+            <pqm-phasor [point]="store.latestUnbalance()" />
+            <div class="unbalance-values">
+              <span><i class="neg"></i>Gegensystem <strong>{{ (store.latestUnbalance()?.negativePercent ?? 0).toFixed(2) }} %</strong></span>
+              <span><i class="zero"></i>Nullsystem <strong>{{ (store.latestUnbalance()?.zeroPercent ?? 0).toFixed(2) }} %</strong></span>
+            </div>
+          </div>
+          <pqm-echart class="chart" [option]="unbalanceOption()" ariaLabel="Zeitverlauf der Spannungsunsymmetrie" />
+        </div>
+      </section>
+    </div>
+
+    <footer><span>PQM Live · Angular</span><span>REST-Snapshot + Cursor-Deltas · {{ liveConfig.config().demoMode ? 'Demoquelle aktiv' : 'Produktiv-API aktiv' }}</span></footer>
+    } @else {
+      <header class="topbar config-topbar">
+        <div><div class="eyebrow">PQM / SYSTEMEINSTELLUNGEN</div><h1>API-Konfiguration</h1></div>
+        <button class="pause-button" type="button" (click)="openView('dashboard')">← Zum Live-Dashboard</button>
+      </header>
+
+      <section class="config-intro">
+        <div><h2>REST-Verbindung und Datenabruf</h2><p>Konfiguration für Snapshot, Cursor-Deltas, Gerätestatus und Zeitreihenverdichtung.</p></div>
+        <span class="config-mode" [class.production]="!configDraft.demoMode">{{ configDraft.demoMode ? 'Demo-Modus' : 'Produktiv-Modus' }}</span>
+      </section>
+
+      @if (configMessage(); as message) {
+        <div class="config-message" [class.success]="message.tone === 'success'" [class.error]="message.tone === 'error'">{{ message.text }}</div>
+      }
+
+      <div class="config-grid">
+        <section class="config-card">
+          <div class="config-card-head"><span>1</span><div><h2>Verbindungsziel</h2><p>Server, Messgerät und Betriebsmodus</p></div></div>
+          <div class="config-fields">
+            <label class="switch-field"><span><strong>Demoquelle verwenden</strong><small>Lokale Testdaten statt externer REST-API</small></span><input type="checkbox" [(ngModel)]="configDraft.demoMode" /></label>
+            <label class="field full"><span>API-Basis-URL</span><input type="url" [(ngModel)]="configDraft.baseUrl" placeholder="https://10.0.0.20/api/v1/live" [disabled]="configDraft.demoMode" /><small>Erreichbar über das dedizierte VPN; ohne abschließenden Schrägstrich.</small></label>
+            <label class="field"><span>Messgerät-ID</span><input type="text" [(ngModel)]="configDraft.meterId" /></label>
+            <label class="field"><span>Authentifizierung</span><select [(ngModel)]="configDraft.authenticationMode" [disabled]="configDraft.demoMode"><option value="none">Keine</option><option value="bearer">Bearer-Token</option></select></label>
+            @if (configDraft.authenticationMode === 'bearer') {
+              <label class="field full"><span>Bearer-Token</span><input type="password" [(ngModel)]="configDraft.bearerToken" autocomplete="off" [disabled]="configDraft.demoMode" /><small>Wird ausschließlich im Arbeitsspeicher gehalten und nicht lokal gespeichert.</small></label>
+            }
+          </div>
+        </section>
+
+        <section class="config-card">
+          <div class="config-card-head"><span>2</span><div><h2>REST-Endpunkte</h2><p>Relative Pfade unterhalb der Basis-URL</p></div></div>
+          <div class="config-fields">
+            <label class="field full"><span>Snapshot-Endpunkt</span><input type="text" [(ngModel)]="configDraft.snapshotPath" /><small>Initialer Zeitbereich mit Aggregationen und Ereignissen.</small></label>
+            <label class="field full"><span>Cursor-Updates</span><input type="text" [(ngModel)]="configDraft.updatesPath" /><small>Alle Deltas nach <code>after_cursor</code>.</small></label>
+            <label class="field full"><span>Last-Seen-Endpunkt</span><input type="text" [(ngModel)]="configDraft.lastSeenPath" /><small>Leichter Statusabruf in historischen Ansichten; keine Anzeige im Dashboard.</small></label>
+          </div>
+        </section>
+
+        <section class="config-card wide-config">
+          <div class="config-card-head"><span>3</span><div><h2>Polling und Zeitreihen</h2><p>Abrufverhalten, Limits und Anzeigeverdichtung</p></div></div>
+          <div class="config-fields metrics-fields">
+            <label class="field"><span>Pollingrate</span><div class="field-unit"><input type="number" min="0.5" max="30" step="0.5" [(ngModel)]="configDraft.pollingSeconds" /><i>s</i></div></label>
+            <label class="field"><span>Request-Timeout</span><div class="field-unit"><input type="number" min="500" max="60000" step="500" [(ngModel)]="configDraft.timeoutMs" /><i>ms</i></div></label>
+            <label class="field"><span>Max. Datensätze/Abruf</span><input type="number" min="100" max="20000" step="100" [(ngModel)]="configDraft.requestLimit" /></label>
+            <label class="field"><span>Bucket Live / 15 min</span><div class="field-unit"><input type="number" min="1" [(ngModel)]="configDraft.bucket15mSeconds" /><i>s</i></div></label>
+            <label class="field"><span>Bucket 1 Stunde</span><div class="field-unit"><input type="number" min="1" [(ngModel)]="configDraft.bucket1hSeconds" /><i>s</i></div></label>
+            <label class="field"><span>Bucket 24 Stunden</span><div class="field-unit"><input type="number" min="1" [(ngModel)]="configDraft.bucket24hSeconds" /><i>s</i></div></label>
+          </div>
+        </section>
+      </div>
+
+      <section class="config-actions">
+        <div><strong>Konfiguration anwenden</strong><small>Ein Speichern startet Snapshot und Polling mit den neuen Parametern neu.</small></div>
+        <div><button class="secondary-action" type="button" (click)="resetApiConfiguration()">Standardwerte</button><button class="secondary-action" type="button" [disabled]="testingConnection()" (click)="testApiConnection()">{{ testingConnection() ? 'Prüfung läuft …' : 'Verbindung testen' }}</button><button class="primary-action" type="button" (click)="saveApiConfiguration()">Speichern & anwenden</button></div>
+      </section>
+      <footer><span>PQM Live · API-Konfiguration</span><span>Geheime Token werden nicht persistent gespeichert.</span></footer>
+    }
+  </main>
+</div>
+
+@if (showDetail()) {
+  <div class="modal-backdrop" (click)="showDetail.set(false)">
+    <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title" (click)="$event.stopPropagation()">
+      <div class="detail-modal-head"><div><h2 id="detail-title">Spannungs-Detailanalyse</h2><p>{{ rangeConfig[store.rangeMode()].label }} · übergebene RMS-Werte</p></div><button type="button" aria-label="Detailanalyse schließen" (click)="showDetail.set(false)">×</button></div>
+      <div class="detail-summary">
+        @for (row of detailStats(); track row.phase) {
+          <article><strong>{{ row.phase }}</strong><dl><div><dt>Mittelwert</dt><dd>{{ row.average.toFixed(2) }} V</dd></div><div><dt>Minimum</dt><dd>{{ row.minimum.toFixed(2) }} V</dd></div><div><dt>Maximum</dt><dd>{{ row.maximum.toFixed(2) }} V</dd></div><div><dt>Geflaggt</dt><dd>{{ row.flagged }} / {{ row.samples }}</dd></div></dl></article>
+        }
+      </div>
+      <div class="detail-note"><span>Grenzwerte und Ereignisse werden vom Backend übergeben; die Oberfläche berechnet keine PQ-Messwerte.</span></div>
+    </section>
+  </div>
+}
