@@ -1,54 +1,84 @@
-# PQM – Power Quality Monitoring
+# PQM – Live-Monitoring für Power Quality
 
-Interaktive React-/TypeScript-Oberfläche für das in `powerquality_schema.sql` definierte PostgreSQL-/TimescaleDB-Datenmodell.
+Angular-Anwendung zur Live-Darstellung bereits berechneter Power-Quality-Messwerte. Die Oberfläche zeigt Spannungsverläufe, PQ-Ereignisse, Spannungs-THDS, Frequenz und weitere Netzqualitätskennzahlen sowie Spannungsunsymmetrie als Zeitreihe und Zeigerdiagramm.
 
-## Start
+Die Anwendung ist bewusst auf die Livedarstellung begrenzt. Datenbankansichten und die Berechnung fachlicher Messgrößen gehören nicht zu diesem Frontend.
 
-```bash
+## Voraussetzungen
+
+- Node.js 20.19 oder neuer
+- npm
+
+## Lokal starten
+
+```powershell
 npm install
-copy .env.example .env
 npm run dev
 ```
 
-`VITE_DEMO_MODE=true` aktiviert den ausdrücklich gekennzeichneten Mock-Service. Mit `VITE_DEMO_MODE=false` werden ausschließlich Antworten der unter `VITE_API_BASE_URL` konfigurierten REST-API verwendet. Ein API-Ausfall führt zu einer sichtbaren Fehlermeldung; es gibt keinen stillen Fallback auf Demo-Daten.
+Die Oberfläche ist anschließend standardmäßig unter `http://localhost:4200` erreichbar. Beim ersten Start ist die integrierte Demoquelle aktiv, sodass keine API benötigt wird.
 
-## Prüfung
+## Prüfung und Produktions-Build
 
-```bash
+```powershell
 npm run typecheck
 npm run build
 ```
 
-Die Anwendung verarbeitet Zeitpunkte intern als ISO-Zeitpunkte und zeigt sie in der Oberfläche in `Europe/Berlin` an. Schreibvorgänge werden im Demo-Modus bewusst nicht als erfolgreich simuliert.
+Der Produktions-Build wird unter `dist/pqm-live/browser` erzeugt.
 
-## Live-Dashboard
+## Bedienung
 
-Das Dashboard fragt im Live-Modus alle zwei Sekunden inkrementelle Daten über
-`GET /dashboard/live` ab. Erwartete Parameter sind `meter_id`, `from`, `to`,
-`after`, `bucket_seconds` und `limit`. Die Antwort enthält:
+Das Live-Dashboard bietet folgende Zeitbereiche:
 
-- `server_time`, `last_measurement_timestamp`, `status` und `cursor`
-- phasenausgerichtete Spannungswerte mit `min_voltage`, `max_voltage` und `avg_voltage`
-- `voltage_thds_percent` für L1, L2 und L3
-- einmalig gezählte PQ-Ereignisse
-- historisch gültige Udin-, Dip- und Swell-Grenzsegmente
-- getrennte Zeitreihen für Frequenz, Pst, Plt, Langzeit-RMS und
-  Spannungsunsymmetrie
-- eigenständige Ereignistypen für RVC und Spannungstransienten
-- Zeigerdiagramme für dreiphasige Unsymmetrie sowie den Vorher-/Nachher-Zustand
-  eines RVC-Ereignisses
+- Live
+- letzte 15 Minuten
+- letzte Stunde
+- letzte 24 Stunden
 
-`voltage_thds_percent` ist ausschließlich Spannungs-THDS in Prozent und wird vom
-Messgerät beziehungsweise DSP geliefert. `null` bedeutet „nicht verfügbar“.
-Der Browser begrenzt jede Datenreihe über einen Ringpuffer; eine Pause stoppt nur
-die Darstellung, nicht die Datenerfassung.
+Die Messgeräteauswahl bleibt in der Kopfzeile. Pollingrate, API-Ziel, REST-Pfade, Zeitüberschreitung, Abruflimit, Zeitreihen-Buckets und optionale Bearer-Authentifizierung werden im Panel **API-Konfiguration** gepflegt. Der Bearer-Token wird nur im Arbeitsspeicher gehalten und nicht im Browser gespeichert.
 
-## Datenbankgrenze
+## REST-Schnittstelle
 
-Die Datenbank berechnet keine Mess-, Aggregat- oder Ereigniswerte. RMS-Werte,
-THDS, Flicker, Unsymmetrie, RVC-/Transienten-Kennwerte und Flags
-müssen vollständig durch Messgerät, DSP oder Anwendungsdienst übergeben werden.
-Das Schema übernimmt Speicherung, Beziehungen und Plausibilitätsprüfungen.
-Auch die für Zeigerdiagramme benötigten Beträge und Winkel werden extern
-ermittelt und vollständig übergeben.
+Der Client verwendet bevorzugt REST mit Cursor-basiertem Polling. Die Standardkonfiguration erwartet:
 
+- `GET /api/v1/live/snapshot`
+- `GET /api/v1/live/updates`
+- `GET /api/v1/live/last-seen` für Verbindungstest und leichtgewichtige Erreichbarkeitsprüfung
+
+Der Snapshot liefert den gewählten Zeitraum. Danach ruft der Client alle neuen Datensätze über den vom Server gelieferten Cursor ab. Eine Pollingrate von zwei Sekunden begrenzt daher nicht die Datenvollständigkeit: Der Cursor bezeichnet die letzte vollständig empfangene Position, und erkannte Sequenzlücken lösen einen neuen Snapshot aus.
+
+Wichtige Abfrageparameter sind:
+
+- `meter_id`
+- `window_minutes` und `bucket_seconds` beim Snapshot
+- `after_cursor` bei inkrementellen Updates
+- `limit`
+
+Die Antworten enthalten unter anderem `serverTime`, `cursor`, Sequenzinformationen, Grenzwerte sowie Arrays für Spannung, Ereignisse, Unsymmetrie und Qualitätskennzahlen. Die Typdefinitionen stehen in `src/app/core/live.models.ts`.
+
+## Fachliche Grenze
+
+Messgerät, DSP oder Anwendungsdienst übergeben alle fachlich berechneten Werte vollständig an die API. Das Frontend visualisiert diese Werte und berechnet keine PQ-Messgrößen. Dies betrifft insbesondere:
+
+- RMS-Minimum, -Maximum und -Mittelwert
+- Spannungs-THDS
+- Frequenz
+- Pst und Plt
+- Unsymmetrie und Zeigerwerte
+- RVC- und Transienten-Kennwerte
+- Ereignisse, Grenzwerte und Flags
+
+Das Datenbankschema `powerquality_schema.sql` dient der Speicherung und enthält keine fachliche Messwertberechnung. Hinweise zur optionalen lokalen Datenbankumgebung stehen in `README_pq_podman.txt`.
+
+## Projektstruktur
+
+```text
+src/
+  app/
+    core/       REST-Vertrag, Konfiguration, Modelle und Live-State
+    shared/     ECharts- und Zeigerdiagramm-Komponenten
+    app.*       Dashboard und API-Konfigurationsoberfläche
+  main.ts       Angular-Einstiegspunkt
+  styles.css    globale Gestaltung
+```
