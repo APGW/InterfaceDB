@@ -225,6 +225,276 @@
   font-size: 9px;
 }
 
+.archive-topbar {
+  margin-bottom: 18px;
+}
+
+.archive-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+  padding: 18px 20px;
+  border: 1px solid #26394f;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #0e1d2e, #0b1726);
+}
+
+.archive-intro h2,
+.archive-intro p,
+.archive-panel h2,
+.archive-panel p {
+  margin: 0;
+}
+
+.archive-intro h2 {
+  font-size: 15px;
+}
+
+.archive-intro p,
+.archive-panel p {
+  margin-top: 5px;
+  color: #7e93aa;
+  font-size: 9px;
+}
+
+.phase-legend {
+  display: flex;
+  gap: 7px;
+}
+
+.phase-legend span,
+.phase-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid #31475f;
+  border-radius: 999px;
+  background: #0a1625;
+  color: #cbd8e6;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.phase-legend i,
+.phase-chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.phase-legend .l1,
+.phase-chip.l1 { color: #38bdf8; }
+.phase-legend .l2,
+.phase-chip.l2 { color: #a78bfa; }
+.phase-legend .l3,
+.phase-chip.l3 { color: #2dd4bf; }
+
+.archive-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.archive-kpis article {
+  padding: 14px 15px;
+  border: 1px solid #23354b;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #0e1b2c, #0b1726);
+}
+
+.archive-kpis span,
+.archive-kpis small,
+.archive-kpis strong {
+  display: block;
+}
+
+.archive-kpis span {
+  color: #8ca0b7;
+  font-size: 8px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.archive-kpis strong {
+  margin: 6px 0 4px;
+  color: #e7f4ff;
+  font-size: 21px;
+}
+
+.archive-kpis small {
+  color: #607991;
+  font-size: 8px;
+}
+
+.archive-panel {
+  overflow: hidden;
+  border: 1px solid #273a51;
+  border-radius: 12px;
+  background: #0c1727;
+}
+
+.archive-panel-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 17px;
+  border-bottom: 1px solid #1d2d41;
+}
+
+.archive-panel h2 {
+  font-size: 13px;
+}
+
+.archive-filters {
+  display: flex;
+  gap: 8px;
+}
+
+.archive-filters label > span {
+  display: block;
+  margin-bottom: 5px;
+  color: #71869d;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.archive-filters select {
+  min-width: 132px;
+  height: 32px;
+  padding: 0 24px 0 9px;
+  border: 1px solid #30445d;
+  border-radius: 7px;
+  background: #081522;
+  color: #cbd8e6;
+  font-size: 9px;
+}
+
+.archive-table-wrap {
+  overflow-x: auto;
+}
+
+.archive-table {
+  width: 100%;
+  min-width: 850px;
+  border-collapse: collapse;
+}
+
+.archive-table th {
+  padding: 10px 12px;
+  border-bottom: 1px solid #24364c;
+  background: #0a1524;
+  color: #698199;
+  font-size: 7px;
+  letter-spacing: .08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.archive-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid #1d2d40;
+  color: #b9c9d8;
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.archive-table tbody tr:hover {
+  background: #102036;
+}
+
+.archive-table td:first-child {
+  white-space: nowrap;
+}
+
+.archive-table td > strong,
+.archive-table td > small {
+  display: block;
+}
+
+.archive-table td > strong {
+  color: #e2edf7;
+  font-size: 10px;
+}
+
+.archive-table td > small {
+  max-width: 560px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #71879d;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.severity-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px #38bdf866;
+}
+
+.severity-dot.warning {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b66;
+}
+
+.severity-dot.critical {
+  background: #fb7185;
+  box-shadow: 0 0 8px #fb718566;
+}
+
+.category-chip,
+.status-chip {
+  display: inline-block;
+  padding: 5px 8px;
+  border: 1px solid #1f6575;
+  border-radius: 999px;
+  background: #0b3443;
+  color: #67e8f9;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.category-chip.system {
+  border-color: #6f3b80;
+  background: #321c3e;
+  color: #e9a8ff;
+}
+
+.status-chip {
+  border-color: #2a6848;
+  background: #123624;
+  color: #86efac;
+}
+
+.status-chip.active {
+  border-color: #9a5d09;
+  background: #4d2b08;
+  color: #fbbf24;
+}
+
+.muted-value {
+  color: #536a82;
+}
+
+.archive-empty {
+  padding: 32px !important;
+  color: #71869d !important;
+  text-align: center;
+}
+
 .config-topbar {
   margin-bottom: 18px;
 }
@@ -763,6 +1033,20 @@
   }
 
   .config-actions > div:last-child {
+    flex-wrap: wrap;
+  }
+
+  .archive-intro,
+  .archive-panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .archive-kpis {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .archive-filters {
     flex-wrap: wrap;
   }
 

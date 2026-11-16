@@ -3,6 +3,7 @@
     <div class="brand"><span class="brand-mark">∿</span><div><strong>PQM</strong><small>POWER QUALITY</small></div></div>
     <nav aria-label="Hauptnavigation">
       <button class="nav-item" [class.active]="activeView() === 'dashboard'" type="button" (click)="openView('dashboard')"><span>⌁</span> Live-Dashboard</button>
+      <button class="nav-item" [class.active]="activeView() === 'archive'" type="button" (click)="openView('archive')"><span>▤</span> Meldungsarchiv</button>
       <button class="nav-item" [class.active]="activeView() === 'configuration'" type="button" (click)="openView('configuration')"><span>⚙</span> API-Konfiguration</button>
     </nav>
     <div class="side-note">
@@ -78,7 +79,7 @@
     <div class="dashboard-grid">
       <section class="panel events-panel">
         <div class="panel-head">
-          <div><span class="panel-number">2</span><div><h2>Power-Quality-Ereignisse</h2><p>Kreis L1 · Raute L2 · Dreieck L3 · Leiterzahl im Symbol</p></div></div>
+          <div><span class="panel-number">2</span><div><h2>Power-Quality-Ereignisse</h2><p>Ereignisfarben · Kreis L1 · Raute L2 · Dreieck L3 · Leiterzahl im Symbol</p></div></div>
           <div class="panel-actions">
             <span class="badge amber">Erkannt</span>
             <select aria-label="Ereignisphase" [ngModel]="eventPhase()" (ngModelChange)="eventPhase.set($event)">
@@ -136,6 +137,59 @@
     </div>
 
     <footer><span>PQM Live · Angular + Drogon</span><span>REST-Snapshot + Mehrfach-Cursor · {{ liveConfig.config().demoMode ? 'Demoquelle aktiv' : 'PostgreSQL-API aktiv' }}</span></footer>
+    } @else if (activeView() === 'archive') {
+      <header class="topbar archive-topbar">
+        <div><div class="eyebrow">PQM / MELDUNGEN</div><h1>Meldungsarchiv</h1></div>
+        <button class="pause-button" type="button" (click)="openView('dashboard')">← Zum Live-Dashboard</button>
+      </header>
+
+      <section class="archive-intro">
+        <div><h2>Ereignisse und Systemdiagnosen</h2><p>PQ-Ereignisse der laufenden Sitzung sowie erkannte API- und Datenstillstände in einer gemeinsamen Chronik.</p></div>
+        <div class="phase-legend" aria-label="Einheitliche Leiterfarben">
+          <span class="l1"><i></i>L1</span><span class="l2"><i></i>L2</span><span class="l3"><i></i>L3</span>
+        </div>
+      </section>
+
+      <section class="archive-kpis" aria-label="Meldungsübersicht">
+        <article><span>Gesamt</span><strong>{{ archiveSummary().total }}</strong><small>in dieser Sitzung</small></article>
+        <article><span>PQ-Ereignisse</span><strong>{{ archiveSummary().pq }}</strong><small>aus dem Messdatenstrom</small></article>
+        <article><span>Systemmeldungen</span><strong>{{ archiveSummary().system }}</strong><small>API und Datenfluss</small></article>
+        <article><span>Leiter</span><strong>{{ archiveSummary().phases }}</strong><small>mit Meldungen</small></article>
+      </section>
+
+      <section class="archive-panel">
+        <div class="archive-panel-head">
+          <div><h2>Chronologische Meldungen</h2><p>Neueste Meldung zuerst · maximal 2.000 PQ-Ereignisse und 500 Systemdiagnosen pro Sitzung</p></div>
+          <div class="archive-filters">
+            <label><span>Kategorie</span><select aria-label="Meldungskategorie" [ngModel]="archiveCategory()" (ngModelChange)="archiveCategory.set($event)"><option value="ALL">Alle Meldungen</option><option value="PQ">PQ-Ereignisse</option><option value="SYSTEM">Systemdiagnosen</option></select></label>
+            <label><span>Leiter</span><select aria-label="Meldungsleiter" [ngModel]="archivePhase()" (ngModelChange)="archivePhase.set($event)"><option value="ALL">Alle Leiter</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option></select></label>
+          </div>
+        </div>
+        <div class="archive-table-wrap">
+          <table class="archive-table">
+            <thead><tr><th>Zeitpunkt</th><th>Kategorie</th><th>Meldung</th><th>Leiter</th><th>Dauer</th><th>Status</th></tr></thead>
+            <tbody>
+              @for (row of archiveRows(); track row.id) {
+                <tr>
+                  <td><span class="severity-dot" [class.warning]="row.severity === 'warning'" [class.critical]="row.severity === 'critical'"></span><time [attr.datetime]="row.timestamp">{{ formatDateTime(row.timestamp) }}</time></td>
+                  <td><span class="category-chip" [class.system]="row.category === 'SYSTEM'">{{ row.category === 'PQ' ? 'PQ-Ereignis' : 'System' }}</span></td>
+                  <td><strong>{{ row.title }}</strong><small>{{ row.description }}</small></td>
+                  <td>
+                    @if (row.phase; as phase) {
+                      <span class="phase-chip" [class.l1]="phase === 'L1'" [class.l2]="phase === 'L2'" [class.l3]="phase === 'L3'"><i></i>{{ phase }}</span>
+                    } @else { <span class="muted-value">–</span> }
+                  </td>
+                  <td>{{ row.durationMs === null ? '–' : row.durationMs.toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' ms' }}</td>
+                  <td><span class="status-chip" [class.active]="row.status === 'Aktiv'">{{ row.status }}</span></td>
+                </tr>
+              } @empty {
+                <tr><td colspan="6" class="archive-empty">Für die gewählten Filter liegen keine Meldungen vor.</td></tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <footer><span>PQM Live · Meldungsarchiv</span><span>Sitzungsbezogene Chronik · Datenbankarchiv folgt über einen separaten Dienst</span></footer>
     } @else {
       <header class="topbar config-topbar">
         <div><div class="eyebrow">PQM / SYSTEMEINSTELLUNGEN</div><h1>API-Konfiguration</h1></div>

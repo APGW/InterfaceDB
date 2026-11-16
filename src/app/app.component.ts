@@ -6,11 +6,26 @@ import { LiveStore, RANGE_CONFIG } from './core/live.store';
 import { EventType, Phase, QualityMetric, RangeMode } from './core/live.models';
 import { ApiConnectionConfig, DEFAULT_API_CONFIG, LiveConfigService } from './core/live-config.service';
 import { LiveApiService } from './core/live-api.service';
+import { PHASE_COLORS, PHASE_SYMBOLS } from './core/phase-style';
 import { EchartComponent } from './shared/echart.component';
 import { PhasorComponent } from './shared/phasor.component';
 
-const PHASE_COLORS: Record<Phase, string> = { L1: '#38bdf8', L2: '#a78bfa', L3: '#2dd4bf' };
-const PHASE_SYMBOLS: Record<Phase, 'circle' | 'diamond' | 'triangle'> = { L1: 'circle', L2: 'diamond', L3: 'triangle' };
+type ViewId = 'dashboard' | 'archive' | 'configuration';
+type ArchiveCategory = 'ALL' | 'PQ' | 'SYSTEM';
+type ArchiveSeverity = 'info' | 'warning' | 'critical';
+
+interface ArchiveRow {
+  id: string;
+  timestamp: string;
+  category: Exclude<ArchiveCategory, 'ALL'>;
+  severity: ArchiveSeverity;
+  title: string;
+  description: string;
+  phase: Phase | null;
+  durationMs: number | null;
+  status: string;
+}
+
 const EVENT_COLORS: Record<EventType, string> = {
   'Voltage Dip': '#f59e0b',
   'Voltage Swell': '#f05252',
@@ -31,7 +46,7 @@ export class AppComponent {
   readonly store = inject(LiveStore);
   readonly liveConfig = inject(LiveConfigService);
   private readonly liveApi = inject(LiveApiService);
-  readonly activeView = signal<'dashboard' | 'configuration'>('dashboard');
+  readonly activeView = signal<ViewId>('dashboard');
   readonly configMessage = signal<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
   readonly testingConnection = signal(false);
   configDraft: ApiConnectionConfig = { ...this.liveConfig.config() };
@@ -49,6 +64,9 @@ export class AppComponent {
   readonly thdsPhase = signal<Phase | 'ALL'>('ALL');
   readonly qualityMetric = signal<QualityMetric>('frequency');
   readonly showDetail = signal(false);
+  readonly archiveCategory = signal<ArchiveCategory>('ALL');
+  readonly archivePhase = signal<Phase | 'ALL'>('ALL');
+  readonly phaseColors = PHASE_COLORS;
   pollingSeconds = 2;
   pollingValidation = '';
 
@@ -56,6 +74,49 @@ export class AppComponent {
     (this.eventType() === 'ALL' || event.type === this.eventType()) &&
     (this.eventPhase() === 'ALL' || event.phase === this.eventPhase()),
   ));
+
+  readonly archiveRows = computed<ArchiveRow[]>(() => {
+    const pqRows: ArchiveRow[] = this.store.archivedEvents().map((event) => ({
+      id: `pq-${event.id}`,
+      timestamp: event.timestamp,
+      category: 'PQ',
+      severity: event.type === 'Voltage Interruption' ? 'critical'
+        : event.type === 'Voltage Dip' || event.type === 'Voltage Swell' ? 'warning' : 'info',
+      title: event.type,
+      description: `${event.phase} · ${event.durationMs.toLocaleString('de-DE', { maximumFractionDigits: 1 })} ms`,
+      phase: event.phase,
+      durationMs: event.durationMs,
+      status: 'Erkannt',
+    }));
+    const systemRows: ArchiveRow[] = this.store.diagnosticHistory().map((entry) => ({
+      id: entry.id,
+      timestamp: entry.detectedAt,
+      category: 'SYSTEM',
+      severity: entry.kind === 'server-unreachable' ? 'critical' : 'warning',
+      title: entry.title,
+      description: entry.message,
+      phase: null,
+      durationMs: null,
+      status: entry.status === 'active' ? 'Aktiv' : 'Behoben',
+    }));
+    return [...pqRows, ...systemRows]
+      .filter((row) => this.archiveCategory() === 'ALL' || row.category === this.archiveCategory())
+      .filter((row) => this.archivePhase() === 'ALL' || row.phase === this.archivePhase())
+      .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+  });
+
+  readonly archiveSummary = computed(() => {
+    const allRows = [
+      ...this.store.archivedEvents().map((event) => ({ category: 'PQ' as const, phase: event.phase })),
+      ...this.store.diagnosticHistory().map(() => ({ category: 'SYSTEM' as const, phase: null })),
+    ];
+    return {
+      total: allRows.length,
+      pq: allRows.filter((row) => row.category === 'PQ').length,
+      system: allRows.filter((row) => row.category === 'SYSTEM').length,
+      phases: new Set(allRows.map((row) => row.phase).filter(Boolean)).size,
+    };
+  });
 
   readonly voltageOption = computed<EChartsOption>(() => {
     const state = this.store.state();
@@ -267,7 +328,7 @@ export class AppComponent {
     this.pollingSeconds = this.store.pollingRateMs() / 1000;
   }
 
-  openView(view: 'dashboard' | 'configuration'): void {
+  openView(view: ViewId): void {
     this.activeView.set(view);
     if (view === 'configuration') {
       this.configDraft = { ...this.liveConfig.config() };
@@ -319,6 +380,11 @@ export class AppComponent {
   formatTime(value: string | null | undefined): string {
     if (!value) return '–';
     return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
+  }
+  formatDateTime(value: string): string {
+    return new Intl.DateTimeFormat('de-DE', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).format(new Date(value));
   }
   formatRate(milliseconds: number): string { return (milliseconds / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
   formatCursor(value: string | null | undefined): string {

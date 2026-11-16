@@ -58,6 +58,8 @@ Die Messgeräteauswahl bleibt in der Kopfzeile. Das Panel **API-Konfiguration** 
 - begrenzte Cursor-Catch-up-Abrufe und periodische Snapshot-Erneuerung
 - wählbares Verhalten bei einer Sequenzlücke und eine Startansicht
 
+Der separate Bereich **Meldungsarchiv** sammelt während der laufenden Browsersitzung PQ-Ereignisse und Systemdiagnosen. Er kann nach Kategorie und Leiter gefiltert werden. L1, L2 und L3 verwenden in Spannungsverlauf, THDS-Diagramm und Zeigerdiagramm dieselben Farben. In der PQ-Ereignisgrafik kennzeichnet die Farbe dagegen den Ereignistyp; Symbolform und Leiterzahl kennzeichnen die Phase.
+
 Zugriffstoken werden ausschließlich im Arbeitsspeicher gehalten und nicht im Browser gespeichert. Das dedizierte VPN wird außerhalb des Browsers auf Betriebssystem- oder Gateway-Ebene aufgebaut.
 
 ## REST-Schnittstelle

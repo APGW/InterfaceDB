@@ -3,7 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { BehaviorSubject, EMPTY, Subscription, catchError, exhaustMap, switchMap, tap, timer } from 'rxjs';
 import { LiveApiService } from './live-api.service';
 import { LiveConfigService } from './live-config.service';
-import { LiveEnvelope, LiveState, RangeMode } from './live.models';
+import { LiveEnvelope, LiveState, PowerQualityEvent, RangeMode } from './live.models';
 
 export const RANGE_CONFIG: Record<RangeMode, { label: string; minutes: number; bucketSeconds: number; polling: boolean }> = {
   live: { label: 'Live', minutes: 15, bucketSeconds: 5, polling: true },
@@ -19,6 +19,12 @@ export interface DiagnosticAlert {
   detectedAt: string;
 }
 
+export interface DiagnosticArchiveEntry extends DiagnosticAlert {
+  id: string;
+  status: 'active' | 'resolved';
+  resolvedAt: string | null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class LiveStore {
   private readonly api = inject(LiveApiService);
@@ -30,6 +36,7 @@ export class LiveStore {
   private lastSnapshotAt = 0;
   private noDataIncidentActive = false;
   private noResponseIncidentActive = false;
+  private readonly archivedEventMap = new Map<string, PowerQualityEvent>();
 
   readonly state = signal<LiveState | null>(null);
   readonly paused = signal(false);
@@ -41,6 +48,8 @@ export class LiveStore {
   readonly lastDataAt = signal<string | null>(null);
   readonly consecutiveUnansweredRequests = signal(0);
   readonly diagnosticAlert = signal<DiagnosticAlert | null>(null);
+  readonly diagnosticHistory = signal<DiagnosticArchiveEntry[]>([]);
+  readonly archivedEvents = signal<PowerQualityEvent[]>([]);
   readonly noNewDataThresholdMs = computed(() => this.pollingRateMs() * 5);
 
   readonly latestVoltage = computed(() => {
@@ -102,6 +111,7 @@ export class LiveStore {
           gapDetected: false,
           errorMessage: null,
         };
+        this.archiveEvents(snapshot.events);
         this.receivedState = next;
         this.lastSnapshotAt = Date.now();
         this.recordResponseSuccess(true);
@@ -170,6 +180,7 @@ export class LiveStore {
       || delta.events.length > 0
       || delta.unbalance.length > 0
       || delta.quality.length > 0;
+    this.archiveEvents(delta.events);
     this.recordResponseSuccess(hasNewData);
 
     if (delta.cursorGapDetected) {
@@ -266,11 +277,13 @@ export class LiveStore {
   private recordResponseSuccess(hasNewData: boolean): void {
     this.consecutiveUnansweredRequests.set(0);
     this.noResponseIncidentActive = false;
+    this.resolveDiagnostics('server-unreachable');
     if (this.diagnosticAlert()?.kind === 'server-unreachable') this.diagnosticAlert.set(null);
 
     if (hasNewData) {
       this.lastDataAt.set(new Date().toISOString());
       this.noDataIncidentActive = false;
+      this.resolveDiagnostics('no-new-data');
       if (this.diagnosticAlert()?.kind === 'no-new-data') this.diagnosticAlert.set(null);
       return;
     }
@@ -290,12 +303,14 @@ export class LiveStore {
       ? 'einen aufeinanderfolgenden Pollingabruf'
       : `${failedRequests} aufeinanderfolgende Pollingabrufe`;
     const message = `Die REST-API hat auf ${requestText} nicht geantwortet. Letzter Fehler: ${cause}`;
-    this.diagnosticAlert.set({
+    const alert: DiagnosticAlert = {
       kind: 'server-unreachable',
       title: 'Keine Antwort vom API-Server',
       message,
       detectedAt: new Date().toISOString(),
-    });
+    };
+    this.diagnosticAlert.set(alert);
+    this.archiveDiagnostic(alert);
     this.publishError(message);
   }
 
@@ -308,12 +323,14 @@ export class LiveStore {
     if (elapsedMs < thresholdMs) return;
 
     this.noDataIncidentActive = true;
-    this.diagnosticAlert.set({
+    const alert: DiagnosticAlert = {
       kind: 'no-new-data',
       title: 'Keine neuen Live-Daten',
       message: `Die API antwortet, hat aber seit ${this.formatDuration(elapsedMs)} keine neuen Messdaten oder Ereignisse bereitgestellt. Der Grenzwert beträgt fünf Pollingintervalle (${this.formatDuration(thresholdMs)}).`,
       detectedAt: new Date().toISOString(),
-    });
+    };
+    this.diagnosticAlert.set(alert);
+    this.archiveDiagnostic(alert);
   }
 
   private resetDiagnosticTracking(): void {
@@ -344,6 +361,37 @@ export class LiveStore {
       if (typeof message === 'string' && message.trim()) return message;
     }
     return 'REST-Abfrage ohne verwertbare Antwort';
+  }
+
+  private archiveEvents(events: PowerQualityEvent[]): void {
+    if (!events.length) return;
+    for (const event of events) this.archivedEventMap.set(event.id, event);
+    const archived = [...this.archivedEventMap.values()]
+      .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
+      .slice(0, 2000);
+    this.archivedEventMap.clear();
+    for (const event of archived) this.archivedEventMap.set(event.id, event);
+    this.archivedEvents.set(archived);
+  }
+
+  private archiveDiagnostic(alert: DiagnosticAlert): void {
+    if (this.diagnosticHistory().some((entry) => entry.kind === alert.kind && entry.status === 'active')) return;
+    const entry: DiagnosticArchiveEntry = {
+      ...alert,
+      id: `${alert.kind}-${Date.parse(alert.detectedAt)}`,
+      status: 'active',
+      resolvedAt: null,
+    };
+    this.diagnosticHistory.update((history) => [entry, ...history].slice(0, 500));
+  }
+
+  private resolveDiagnostics(kind: DiagnosticAlert['kind']): void {
+    const resolvedAt = new Date().toISOString();
+    this.diagnosticHistory.update((history) => history.map((entry) =>
+      entry.kind === kind && entry.status === 'active'
+        ? { ...entry, status: 'resolved', resolvedAt }
+        : entry,
+    ));
   }
 
   private mergeUnique<T>(current: T[], incoming: T[], keyOf: (value: T) => string): T[] {
