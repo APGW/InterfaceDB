@@ -35,7 +35,7 @@
     <section class="control-strip" aria-label="Live-Verbindung und Polling">
       <div class="connection-status" [class.error]="store.state()?.connection === 'error'">
         <span class="status-light"></span>
-        <div><strong>{{ store.state()?.connection === 'online' ? 'REST-Verbindung aktiv' : 'Verbindung wird aufgebaut' }}</strong><small>Cursor {{ store.state()?.cursor ?? '–' }} · Sequenz {{ store.state()?.lastSequence ?? '–' }}</small></div>
+        <div><strong>{{ store.state()?.connection === 'online' ? 'REST-Verbindung aktiv' : store.state()?.connection === 'error' ? 'REST-Verbindung gestört' : 'Verbindung wird aufgebaut' }}</strong><small [title]="store.state()?.cursor ?? ''">Cursor {{ formatCursor(store.state()?.cursor) }} · Sequenz {{ store.state()?.lastSequence ?? '–' }}</small></div>
       </div>
 
       <form class="polling-control" (ngSubmit)="applyPollingRate()">
@@ -135,7 +135,7 @@
       </section>
     </div>
 
-    <footer><span>PQM Live · Angular</span><span>REST-Snapshot + Cursor-Deltas · {{ liveConfig.config().demoMode ? 'Demoquelle aktiv' : 'Produktiv-API aktiv' }}</span></footer>
+    <footer><span>PQM Live · Angular + Drogon</span><span>REST-Snapshot + Mehrfach-Cursor · {{ liveConfig.config().demoMode ? 'Demoquelle aktiv' : 'PostgreSQL-API aktiv' }}</span></footer>
     } @else {
       <header class="topbar config-topbar">
         <div><div class="eyebrow">PQM / SYSTEMEINSTELLUNGEN</div><h1>API-Konfiguration</h1></div>
@@ -143,7 +143,7 @@
       </header>
 
       <section class="config-intro">
-        <div><h2>REST-Verbindung und Datenabruf</h2><p>Konfiguration für Snapshot, Cursor-Deltas, Gerätestatus und Zeitreihenverdichtung.</p></div>
+        <div><h2>REST-Verbindung und Datenabruf</h2><p>Konfiguration für Snapshot, Cursor-Deltas, Sicherheit, Wiederherstellung und Zeitreihenverdichtung.</p></div>
         <span class="config-mode" [class.production]="!configDraft.demoMode">{{ configDraft.demoMode ? 'Demo-Modus' : 'Produktiv-Modus' }}</span>
       </section>
 
@@ -158,10 +158,7 @@
             <label class="switch-field"><span><strong>Demoquelle verwenden</strong><small>Lokale Testdaten statt externer REST-API</small></span><input type="checkbox" [(ngModel)]="configDraft.demoMode" /></label>
             <label class="field full"><span>API-Basis-URL</span><input type="url" [(ngModel)]="configDraft.baseUrl" placeholder="https://10.0.0.20/api/v1/live" [disabled]="configDraft.demoMode" /><small>Erreichbar über das dedizierte VPN; ohne abschließenden Schrägstrich.</small></label>
             <label class="field"><span>Messgerät-ID</span><input type="text" [(ngModel)]="configDraft.meterId" /></label>
-            <label class="field"><span>Authentifizierung</span><select [(ngModel)]="configDraft.authenticationMode" [disabled]="configDraft.demoMode"><option value="none">Keine</option><option value="bearer">Bearer-Token</option></select></label>
-            @if (configDraft.authenticationMode === 'bearer') {
-              <label class="field full"><span>Bearer-Token</span><input type="password" [(ngModel)]="configDraft.bearerToken" autocomplete="off" [disabled]="configDraft.demoMode" /><small>Wird ausschließlich im Arbeitsspeicher gehalten und nicht lokal gespeichert.</small></label>
-            }
+            <label class="field"><span>Authentifizierung</span><select [(ngModel)]="configDraft.authenticationMode" [disabled]="configDraft.demoMode"><option value="none">Keine</option><option value="bearer">Bearer-Token</option><option value="oauth2">OAuth 2.0 / Keycloak</option></select></label>
           </div>
         </section>
 
@@ -185,13 +182,48 @@
             <label class="field"><span>Bucket 24 Stunden</span><div class="field-unit"><input type="number" min="1" [(ngModel)]="configDraft.bucket24hSeconds" /><i>s</i></div></label>
           </div>
         </section>
+
+        <section class="config-card">
+          <div class="config-card-head"><span>4</span><div><h2>Netz und Sicherheit</h2><p>VPN-Grenze, Zugangstoken und OAuth-Client</p></div></div>
+          <div class="config-fields">
+            <div class="config-note full"><strong>Dediziertes VPN</strong><span>Das VPN wird am Betriebssystem oder Gateway aufgebaut. Lokal ist die Drogon-API per HTTP erreichbar; für ein HTTPS-Frontend wird sie über einen TLS-Reverse-Proxy im VPN veröffentlicht.</span></div>
+            @if (configDraft.authenticationMode === 'none') {
+              <div class="auth-state full"><i></i><span><strong>Keine Anwendungsauthentifizierung</strong><small>Nur für Demo oder eine bereits auf Netzebene abgesicherte API empfohlen.</small></span></div>
+            }
+            @if (configDraft.authenticationMode === 'bearer') {
+              <label class="field full"><span>Bearer-Token</span><input type="password" [(ngModel)]="configDraft.bearerToken" autocomplete="off" [disabled]="configDraft.demoMode" /><small>Wird ausschließlich im Arbeitsspeicher gehalten und nicht lokal gespeichert.</small></label>
+            }
+            @if (configDraft.authenticationMode === 'oauth2') {
+              <label class="field full"><span>OIDC-Issuer-URL</span><input type="url" [(ngModel)]="configDraft.oauthIssuerUrl" placeholder="https://auth.example/realms/pqm" [disabled]="configDraft.demoMode" /><small>Basis des Keycloak-Realm beziehungsweise OpenID-Connect-Issuers.</small></label>
+              <label class="field"><span>Client-ID</span><input type="text" [(ngModel)]="configDraft.oauthClientId" [disabled]="configDraft.demoMode" /></label>
+              <label class="field"><span>Scopes</span><input type="text" [(ngModel)]="configDraft.oauthScope" [disabled]="configDraft.demoMode" /></label>
+              <label class="field full"><span>Aktuelles Zugriffstoken</span><input type="password" [(ngModel)]="configDraft.bearerToken" autocomplete="off" [disabled]="configDraft.demoMode" /><small>Sitzungsbezogen. Die spätere Keycloak-Anmeldung liefert dieses Token per Authorization Code + PKCE.</small></label>
+              <div class="discovery-url full"><span>Discovery-Dokument</span><code>{{ openIdConfigurationUrl() }}</code></div>
+            }
+          </div>
+        </section>
+
+        <section class="config-card">
+          <div class="config-card-head"><span>5</span><div><h2>Ausfallsicherheit</h2><p>Retry, Backoff und Cursor-Wiederherstellung</p></div></div>
+          <div class="config-fields resilience-fields">
+            <label class="field"><span>Wiederholungen</span><input type="number" min="0" max="10" step="1" [(ngModel)]="configDraft.retryCount" /><small>Je fehlgeschlagenem REST-Abruf.</small></label>
+            <label class="field"><span>Unbeantwortete Abrufe bis Alarm</span><input type="number" min="1" max="20" step="1" [(ngModel)]="configDraft.unansweredRequestLimit" /><small>Aufeinanderfolgende Pollingzyklen nach Timeout und Retry.</small></label>
+            <label class="field"><span>Start-Backoff</span><div class="field-unit"><input type="number" min="100" max="30000" step="100" [(ngModel)]="configDraft.retryBaseDelayMs" /><i>ms</i></div></label>
+            <label class="field"><span>Max. Backoff</span><div class="field-unit"><input type="number" min="500" max="120000" step="500" [(ngModel)]="configDraft.retryMaxDelayMs" /><i>ms</i></div></label>
+            <label class="field"><span>Max. Catch-up-Abrufe</span><input type="number" min="1" max="100" step="1" [(ngModel)]="configDraft.maxCatchUpRequests" /><small>Begrenzt zusammenhängende Cursor-Nachholabrufe.</small></label>
+            <label class="field"><span>Snapshot-Erneuerung</span><div class="field-unit"><input type="number" min="0" max="1440" step="1" [(ngModel)]="configDraft.snapshotRefreshMinutes" /><i>min</i></div><small>0 deaktiviert die periodische Erneuerung.</small></label>
+            <label class="field full"><span>Bei Sequenzlücke</span><select [(ngModel)]="configDraft.sequenceGapAction"><option value="reload-snapshot">Snapshot neu laden</option><option value="stop-with-error">Stoppen und melden</option></select></label>
+            <div class="config-note full"><strong>Datenstillstand</strong><span>Ein Dialog erscheint, wenn sich der Cursor und die Nutzdaten länger als Pollingrate × 5 nicht ändern. Aktueller Grenzwert: {{ configDraft.pollingSeconds * 5 }} s.</span></div>
+            <label class="field full"><span>Startansicht</span><select [(ngModel)]="configDraft.defaultRange"><option value="live">Live</option><option value="15m">Letzte 15 Minuten</option><option value="1h">Letzte Stunde</option><option value="24h">Letzte 24 Stunden</option></select><small>Wird beim nächsten vollständigen Start des Dashboards verwendet.</small></label>
+          </div>
+        </section>
       </div>
 
       <section class="config-actions">
         <div><strong>Konfiguration anwenden</strong><small>Ein Speichern startet Snapshot und Polling mit den neuen Parametern neu.</small></div>
         <div><button class="secondary-action" type="button" (click)="resetApiConfiguration()">Standardwerte</button><button class="secondary-action" type="button" [disabled]="testingConnection()" (click)="testApiConnection()">{{ testingConnection() ? 'Prüfung läuft …' : 'Verbindung testen' }}</button><button class="primary-action" type="button" (click)="saveApiConfiguration()">Speichern & anwenden</button></div>
       </section>
-      <footer><span>PQM Live · API-Konfiguration</span><span>Geheime Token werden nicht persistent gespeichert.</span></footer>
+      <footer><span>PQM Live · Drogon-API-Konfiguration</span><span>Geheime Token werden nicht persistent gespeichert.</span></footer>
     }
   </main>
 </div>
@@ -206,6 +238,32 @@
         }
       </div>
       <div class="detail-note"><span>Grenzwerte und Ereignisse werden vom Backend übergeben; die Oberfläche berechnet keine PQ-Messwerte.</span></div>
+    </section>
+  </div>
+}
+
+@if (store.diagnosticAlert(); as alert) {
+  <div class="modal-backdrop diagnostic-backdrop">
+    <section class="diagnostic-modal" role="alertdialog" aria-modal="true" aria-labelledby="diagnostic-title">
+      <div class="diagnostic-icon" aria-hidden="true">!</div>
+      <div class="diagnostic-copy">
+        <span class="diagnostic-kicker">LIVE-DIAGNOSE</span>
+        <h2 id="diagnostic-title">{{ alert.title }}</h2>
+        <p>{{ alert.message }}</p>
+        <dl>
+          <div><dt>Pollingrate</dt><dd>{{ formatRate(store.pollingRateMs()) }} s</dd></div>
+          <div><dt>Datenstillstand-Grenze</dt><dd>{{ formatRate(store.noNewDataThresholdMs()) }} s</dd></div>
+          @if (alert.kind === 'server-unreachable') {
+            <div><dt>Unbeantwortete Abrufe</dt><dd>{{ store.consecutiveUnansweredRequests() }} / {{ liveConfig.config().unansweredRequestLimit }}</dd></div>
+          }
+          <div><dt>Letzte neue Daten</dt><dd>{{ formatTime(store.lastDataAt()) }}</dd></div>
+          <div><dt>Erkannt um</dt><dd>{{ formatTime(alert.detectedAt) }}</dd></div>
+        </dl>
+      </div>
+      <div class="diagnostic-actions">
+        <button class="secondary-action" type="button" (click)="store.dismissDiagnosticAlert()">Schließen</button>
+        <button class="primary-action" type="button" (click)="store.reload()">Neu verbinden</button>
+      </div>
     </section>
   </div>
 }

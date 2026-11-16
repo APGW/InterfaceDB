@@ -1,0 +1,64 @@
+FROM debian:12-slim AS build
+
+ARG DROGON_VERSION=v1.9.13
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        libjsoncpp-dev \
+        libpq-dev \
+        libssl-dev \
+        uuid-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --branch "${DROGON_VERSION}" --depth 1 --recurse-submodules --shallow-submodules \
+        https://github.com/drogonframework/drogon.git /tmp/drogon \
+    && cmake -S /tmp/drogon -B /tmp/drogon/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_TESTING=OFF \
+    && cmake --build /tmp/drogon/build --parallel "$(nproc)" \
+    && cmake --install /tmp/drogon/build \
+    && rm -rf /tmp/drogon
+
+COPY backend /src/backend
+RUN cmake -S /src/backend -B /src/backend/build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /src/backend/build --parallel "$(nproc)" \
+    && cmake --install /src/backend/build --prefix /opt/pqm
+
+FROM debian:12-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libjsoncpp25 \
+        libpq5 \
+        libssl3 \
+        libuuid1 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /usr/local /usr/local
+COPY --from=build /opt/pqm/bin/pqm-live-api /app/pqm-live-api
+COPY backend/sql /app/sql
+RUN ldconfig
+
+ENV API_BIND_ADDRESS=0.0.0.0 \
+    API_PORT=8080 \
+    API_THREADS=2 \
+    API_CORS_ORIGIN=http://localhost:4200 \
+    DB_HOST=pq-timescaledb \
+    DB_PORT=5432 \
+    DB_CONNECTIONS=4 \
+    PQM_SQL_DIR=/app/sql
+
+USER 10001:10001
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 \
+  CMD curl --fail --silent --show-error http://127.0.0.1:8080/healthz >/dev/null || exit 1
+
+ENTRYPOINT ["/app/pqm-live-api"]

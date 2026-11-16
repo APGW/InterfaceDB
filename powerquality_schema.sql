@@ -339,6 +339,8 @@ CREATE TABLE IF NOT EXISTS public.basic_measurement_values (
     is_flagged      BOOLEAN NOT NULL,
     quality_class   public.measurement_class NOT NULL DEFAULT 'CLASS_A',
     rms_voltage     DOUBLE PRECISION NOT NULL,
+    rms_voltage_min DOUBLE PRECISION,
+    rms_voltage_max DOUBLE PRECISION,
     rms_current     DOUBLE PRECISION NOT NULL,
     frequency       DOUBLE PRECISION NOT NULL,
     voltage_thds_percent DOUBLE PRECISION,
@@ -358,7 +360,32 @@ CREATE TABLE IF NOT EXISTS public.basic_measurement_values (
 -- Ergänzt Spannungs-THDS auch bei einem bereits vorhandenen Schema.
 -- Bestehende Messwerte bleiben NULL und werden nicht nachträglich erfunden.
 ALTER TABLE public.basic_measurement_values
-    ADD COLUMN IF NOT EXISTS voltage_thds_percent DOUBLE PRECISION;
+    ADD COLUMN IF NOT EXISTS voltage_thds_percent DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS rms_voltage_min DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS rms_voltage_max DOUBLE PRECISION;
+
+-- Min/Max werden ebenfalls vom Messgerät oder Auswertungsdienst geliefert.
+-- NULL bedeutet, dass für diesen Datensatz kein externes Band vorliegt; die
+-- API reicht dann den vorhandenen RMS-Wert ohne zusätzliche Berechnung durch.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname = 'ck_basic_measurement_values_min_max'
+           AND conrelid = 'public.basic_measurement_values'::regclass
+    ) THEN
+        ALTER TABLE public.basic_measurement_values
+            ADD CONSTRAINT ck_basic_measurement_values_min_max
+            CHECK (
+                (rms_voltage_min IS NULL OR rms_voltage_min >= 0)
+                AND (rms_voltage_max IS NULL OR rms_voltage_max >= 0)
+                AND (rms_voltage_min IS NULL OR rms_voltage_min <= rms_voltage)
+                AND (rms_voltage_max IS NULL OR rms_voltage <= rms_voltage_max)
+            );
+    END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 7. Kurzfristig aggregierte Werte: ShortTermAggregatedValue
@@ -764,6 +791,12 @@ ON CONFLICT DO NOTHING;
 
 COMMENT ON TABLE public.basic_measurement_values IS
     'Grundmesswerte (10/12 Perioden, ca. 200 ms) gemäß Messkonfiguration';
+
+COMMENT ON COLUMN public.basic_measurement_values.rms_voltage_min IS
+    'Extern übergebenes Minimum des dargestellten RMS-Bandes; NULL bedeutet nicht verfügbar.';
+
+COMMENT ON COLUMN public.basic_measurement_values.rms_voltage_max IS
+    'Extern übergebenes Maximum des dargestellten RMS-Bandes; NULL bedeutet nicht verfügbar.';
 
 COMMENT ON TABLE public.short_term_aggregated_values IS
     'Kurzzeit-Aggregate (150/180 Perioden, ca. 3 s)';

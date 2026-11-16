@@ -9,7 +9,7 @@ export interface VoltagePoint {
   rmsAvg: number;
   rmsMin: number;
   rmsMax: number;
-  voltageThdsPercent: number;
+  voltageThdsPercent: number | null;
   frequencyHz: number;
   isFlagged: boolean;
   sequence: number;
@@ -41,10 +41,10 @@ export interface UnbalancePoint {
 
 export interface QualityPoint {
   timestamp: string;
-  frequencyHz: number;
-  pst: number;
-  plt: number;
-  longTermRms: number;
+  frequencyHz: number | null;
+  pst: number | null;
+  plt: number | null;
+  longTermRms: number | null;
   sequence: number;
 }
 
@@ -55,7 +55,8 @@ export interface LiveEnvelope {
   lastSequence: number;
   retentionStartSequence: number;
   hasMore: boolean;
-  lastSeen: string;
+  cursorGapDetected?: boolean;
+  lastSeen: string | null;
   voltage: VoltagePoint[];
   events: PowerQualityEvent[];
   unbalance: UnbalancePoint[];

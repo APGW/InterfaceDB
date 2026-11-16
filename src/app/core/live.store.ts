@@ -12,6 +12,13 @@ export const RANGE_CONFIG: Record<RangeMode, { label: string; minutes: number; b
   '24h': { label: '24 h', minutes: 1440, bucketSeconds: 360, polling: false },
 };
 
+export interface DiagnosticAlert {
+  kind: 'no-new-data' | 'server-unreachable';
+  title: string;
+  message: string;
+  detectedAt: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class LiveStore {
   private readonly api = inject(LiveApiService);
@@ -20,14 +27,21 @@ export class LiveStore {
   private readonly rateSubject = new BehaviorSubject<number>(this.liveConfig.config().pollingSeconds * 1000);
   private pollingSubscription?: Subscription;
   private receivedState: LiveState | null = null;
+  private lastSnapshotAt = 0;
+  private noDataIncidentActive = false;
+  private noResponseIncidentActive = false;
 
   readonly state = signal<LiveState | null>(null);
   readonly paused = signal(false);
   readonly pollingRateMs = signal(this.liveConfig.config().pollingSeconds * 1000);
-  readonly rangeMode = signal<RangeMode>('live');
+  readonly rangeMode = signal<RangeMode>(this.liveConfig.config().defaultRange);
   readonly isLoading = signal(true);
   readonly isCatchingUp = signal(false);
   readonly lastPollAt = signal<string | null>(null);
+  readonly lastDataAt = signal<string | null>(null);
+  readonly consecutiveUnansweredRequests = signal(0);
+  readonly diagnosticAlert = signal<DiagnosticAlert | null>(null);
+  readonly noNewDataThresholdMs = computed(() => this.pollingRateMs() * 5);
 
   readonly latestVoltage = computed(() => {
     const points = this.state()?.voltage ?? [];
@@ -46,6 +60,7 @@ export class LiveStore {
     if (mode === this.rangeMode() && this.state()) return;
     this.rangeMode.set(mode);
     this.paused.set(false);
+    this.resetDiagnosticTracking();
     this.loadSnapshot(false);
   }
 
@@ -64,7 +79,12 @@ export class LiveStore {
   }
 
   reload(): void {
+    this.resetDiagnosticTracking();
     this.loadSnapshot(false);
+  }
+
+  dismissDiagnosticAlert(): void {
+    this.diagnosticAlert.set(null);
   }
 
   private loadSnapshot(startPolling: boolean): void {
@@ -83,6 +103,8 @@ export class LiveStore {
           errorMessage: null,
         };
         this.receivedState = next;
+        this.lastSnapshotAt = Date.now();
+        this.recordResponseSuccess(true);
         if (!this.paused()) this.state.set(structuredClone(next));
         this.isLoading.set(false);
         this.lastPollAt.set(new Date().toISOString());
@@ -90,7 +112,8 @@ export class LiveStore {
       }),
       catchError((error: unknown) => {
         this.isLoading.set(false);
-        this.publishError(error);
+        this.recordRequestFailure(error);
+        if (startPolling && !this.pollingSubscription) this.startPolling();
         return EMPTY;
       }),
     ).subscribe();
@@ -101,21 +124,33 @@ export class LiveStore {
       switchMap((rate) => timer(0, rate).pipe(
         // exhaustMap prevents a slow REST request from overlapping the next tick.
         exhaustMap(() => {
+          this.checkForMissingData();
           if (!RANGE_CONFIG[this.rangeMode()].polling) {
             return this.api.getLastSeen().pipe(
-              tap((heartbeat) => this.acceptHeartbeat(heartbeat)),
+              tap((heartbeat) => {
+                this.recordResponseSuccess(false);
+                this.acceptHeartbeat(heartbeat);
+              }),
               catchError((error: unknown) => {
-                this.publishError(error);
+                this.recordRequestFailure(error);
                 return EMPTY;
               }),
             );
           }
+          const config = this.liveConfig.config();
+          if (config.snapshotRefreshMinutes > 0 && Date.now() - this.lastSnapshotAt >= config.snapshotRefreshMinutes * 60_000) {
+            this.loadSnapshot(false);
+            return EMPTY;
+          }
           const cursor = this.receivedState?.cursor;
-          if (!cursor) return EMPTY;
+          if (!cursor) {
+            if (!this.isLoading()) this.loadSnapshot(false);
+            return EMPTY;
+          }
           return this.api.getUpdates(cursor).pipe(
-            tap((delta) => this.acceptDelta(delta)),
+            tap((delta) => this.acceptDelta(delta, 0)),
             catchError((error: unknown) => {
-              this.publishError(error);
+              this.recordRequestFailure(error);
               return EMPTY;
             }),
           );
@@ -125,24 +160,47 @@ export class LiveStore {
     ).subscribe();
   }
 
-  private acceptDelta(delta: LiveEnvelope): void {
+  private acceptDelta(delta: LiveEnvelope, catchUpDepth: number): void {
     if (!RANGE_CONFIG[this.rangeMode()].polling) return;
     const current = this.receivedState;
     if (!current) return;
 
-    if (delta.firstSequence > current.lastSequence + 1) {
-      this.receivedState = { ...current, gapDetected: true, connection: 'error', errorMessage: 'Sequenzlücke erkannt – Snapshot wird neu geladen.' };
+    const hasNewData = delta.cursor !== current.cursor
+      || delta.voltage.length > 0
+      || delta.events.length > 0
+      || delta.unbalance.length > 0
+      || delta.quality.length > 0;
+    this.recordResponseSuccess(hasNewData);
+
+    if (delta.cursorGapDetected) {
+      const reloadSnapshot = this.liveConfig.config().sequenceGapAction === 'reload-snapshot';
+      this.receivedState = {
+        ...current,
+        gapDetected: true,
+        connection: 'error',
+        errorMessage: reloadSnapshot
+          ? 'Sequenzlücke erkannt – Snapshot wird neu geladen.'
+          : 'Sequenzlücke erkannt – automatische Wiederherstellung ist deaktiviert.',
+      };
       if (!this.paused()) this.state.set(structuredClone(this.receivedState));
-      this.loadSnapshot(false);
+      if (reloadSnapshot) {
+        this.loadSnapshot(false);
+      }
       return;
     }
 
     const cutoff = Date.now() - RANGE_CONFIG[this.rangeMode()].minutes * 60 * 1000;
-    const voltage = [...current.voltage, ...delta.voltage].filter((point) => Date.parse(point.timestamp) >= cutoff);
+    const voltage = this.mergeUnique(
+      current.voltage,
+      delta.voltage,
+      (point) => `${point.timestamp}:${point.phase}`,
+    ).filter((point) => Date.parse(point.timestamp) >= cutoff);
     const eventsById = new Map([...current.events, ...delta.events].map((event) => [event.id, event]));
     const events = [...eventsById.values()].filter((event) => Date.parse(event.timestamp) >= cutoff);
-    const unbalance = [...current.unbalance, ...delta.unbalance].filter((point) => Date.parse(point.timestamp) >= cutoff);
-    const quality = [...current.quality, ...delta.quality].filter((point) => Date.parse(point.timestamp) >= cutoff);
+    const unbalance = this.mergeUnique(current.unbalance, delta.unbalance, (point) => point.timestamp)
+      .filter((point) => Date.parse(point.timestamp) >= cutoff);
+    const quality = this.mergeUnique(current.quality, delta.quality, (point) => point.timestamp)
+      .filter((point) => Date.parse(point.timestamp) >= cutoff);
 
     this.receivedState = {
       ...current,
@@ -159,14 +217,26 @@ export class LiveStore {
     if (!this.paused()) this.state.set(structuredClone(this.receivedState));
 
     if (delta.hasMore) {
+      const maxCatchUpRequests = this.liveConfig.config().maxCatchUpRequests;
+      if (catchUpDepth >= maxCatchUpRequests) {
+        this.isCatchingUp.set(false);
+        this.receivedState = {
+          ...this.receivedState,
+          connection: 'error',
+          errorMessage: `Catch-up-Limit von ${maxCatchUpRequests} Abrufen erreicht – Snapshot wird erneuert.`,
+        };
+        if (!this.paused()) this.state.set(structuredClone(this.receivedState));
+        this.loadSnapshot(false);
+        return;
+      }
       this.isCatchingUp.set(true);
-      queueMicrotask(() => this.catchUp());
+      queueMicrotask(() => this.catchUp(catchUpDepth + 1));
     } else {
       this.isCatchingUp.set(false);
     }
   }
 
-  private acceptHeartbeat(heartbeat: { serverTime: string; lastSeen: string }): void {
+  private acceptHeartbeat(heartbeat: { serverTime: string; lastSeen: string | null }): void {
     if (!this.receivedState) return;
     this.receivedState = {
       ...this.receivedState,
@@ -179,25 +249,107 @@ export class LiveStore {
     this.lastPollAt.set(new Date().toISOString());
   }
 
-  private catchUp(): void {
+  private catchUp(catchUpDepth: number): void {
     const cursor = this.receivedState?.cursor;
     if (!cursor) return;
     this.api.getUpdates(cursor).pipe(
       takeUntilDestroyed(this.destroyRef),
-      tap((delta) => this.acceptDelta(delta)),
+      tap((delta) => this.acceptDelta(delta, catchUpDepth)),
       catchError((error: unknown) => {
         this.isCatchingUp.set(false);
-        this.publishError(error);
+        this.recordRequestFailure(error);
         return EMPTY;
       }),
     ).subscribe();
   }
 
+  private recordResponseSuccess(hasNewData: boolean): void {
+    this.consecutiveUnansweredRequests.set(0);
+    this.noResponseIncidentActive = false;
+    if (this.diagnosticAlert()?.kind === 'server-unreachable') this.diagnosticAlert.set(null);
+
+    if (hasNewData) {
+      this.lastDataAt.set(new Date().toISOString());
+      this.noDataIncidentActive = false;
+      if (this.diagnosticAlert()?.kind === 'no-new-data') this.diagnosticAlert.set(null);
+      return;
+    }
+
+    this.checkForMissingData();
+  }
+
+  private recordRequestFailure(error: unknown): void {
+    const failedRequests = this.consecutiveUnansweredRequests() + 1;
+    this.consecutiveUnansweredRequests.set(failedRequests);
+    const limit = this.liveConfig.config().unansweredRequestLimit;
+    if (failedRequests < limit || this.noResponseIncidentActive) return;
+
+    this.noResponseIncidentActive = true;
+    const cause = this.describeError(error);
+    const requestText = failedRequests === 1
+      ? 'einen aufeinanderfolgenden Pollingabruf'
+      : `${failedRequests} aufeinanderfolgende Pollingabrufe`;
+    const message = `Die REST-API hat auf ${requestText} nicht geantwortet. Letzter Fehler: ${cause}`;
+    this.diagnosticAlert.set({
+      kind: 'server-unreachable',
+      title: 'Keine Antwort vom API-Server',
+      message,
+      detectedAt: new Date().toISOString(),
+    });
+    this.publishError(message);
+  }
+
+  private checkForMissingData(): void {
+    if (!RANGE_CONFIG[this.rangeMode()].polling || this.consecutiveUnansweredRequests() > 0 || this.noDataIncidentActive) return;
+    const lastDataAt = this.lastDataAt();
+    if (!lastDataAt) return;
+    const elapsedMs = Date.now() - Date.parse(lastDataAt);
+    const thresholdMs = this.noNewDataThresholdMs();
+    if (elapsedMs < thresholdMs) return;
+
+    this.noDataIncidentActive = true;
+    this.diagnosticAlert.set({
+      kind: 'no-new-data',
+      title: 'Keine neuen Live-Daten',
+      message: `Die API antwortet, hat aber seit ${this.formatDuration(elapsedMs)} keine neuen Messdaten oder Ereignisse bereitgestellt. Der Grenzwert beträgt fünf Pollingintervalle (${this.formatDuration(thresholdMs)}).`,
+      detectedAt: new Date().toISOString(),
+    });
+  }
+
+  private resetDiagnosticTracking(): void {
+    this.consecutiveUnansweredRequests.set(0);
+    this.lastDataAt.set(null);
+    this.noDataIncidentActive = false;
+    this.noResponseIncidentActive = false;
+    this.diagnosticAlert.set(null);
+  }
+
   private publishError(error: unknown): void {
-    const message = error instanceof Error ? error.message : 'REST-Abfrage fehlgeschlagen';
+    const message = this.describeError(error);
     if (this.receivedState) {
       this.receivedState = { ...this.receivedState, connection: 'error', errorMessage: message };
       if (!this.paused()) this.state.set(structuredClone(this.receivedState));
     }
+  }
+
+  private formatDuration(milliseconds: number): string {
+    return `${(milliseconds / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} s`;
+  }
+
+  private describeError(error: unknown): string {
+    if (typeof error === 'string' && error.trim()) return error;
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'object' && error !== null && 'message' in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) return message;
+    }
+    return 'REST-Abfrage ohne verwertbare Antwort';
+  }
+
+  private mergeUnique<T>(current: T[], incoming: T[], keyOf: (value: T) => string): T[] {
+    const values = new Map<string, T>();
+    for (const value of current) values.set(keyOf(value), value);
+    for (const value of incoming) values.set(keyOf(value), value);
+    return [...values.values()];
   }
 }

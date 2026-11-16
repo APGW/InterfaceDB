@@ -1,6 +1,6 @@
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { Observable, defer, delay, map, of, timeout } from 'rxjs';
+import { MonoTypeOperatorFunction, Observable, defer, delay, map, of, retry, timeout, timer } from 'rxjs';
 import { EventType, LiveEnvelope, Phase, PowerQualityEvent, QualityPoint, UnbalancePoint, VoltagePoint } from './live.models';
 import { ApiConnectionConfig, LiveConfigService } from './live-config.service';
 
@@ -21,17 +21,17 @@ export class LiveApiService {
       .set('window_minutes', windowMinutes)
       .set('bucket_seconds', bucketSeconds)
       .set('limit', config.requestLimit);
-    return this.http.get<LiveEnvelope>(this.url(config, config.snapshotPath), { params, headers: this.headers(config) }).pipe(timeout(config.timeoutMs));
+    return this.http.get<LiveEnvelope>(this.url(config, config.snapshotPath), { params, headers: this.headers(config) }).pipe(this.withResilience(config));
   }
 
   getUpdates(afterCursor: string): Observable<LiveEnvelope> {
     const config = this.liveConfig.config();
     if (config.demoMode) return of(this.demoUpdates(afterCursor)).pipe(delay(90));
     const params = new HttpParams().set('meter_id', config.meterId).set('after_cursor', afterCursor).set('limit', config.requestLimit);
-    return this.http.get<LiveEnvelope>(this.url(config, config.updatesPath), { params, headers: this.headers(config) }).pipe(timeout(config.timeoutMs));
+    return this.http.get<LiveEnvelope>(this.url(config, config.updatesPath), { params, headers: this.headers(config) }).pipe(this.withResilience(config));
   }
 
-  getLastSeen(): Observable<{ serverTime: string; lastSeen: string }> {
+  getLastSeen(): Observable<{ serverTime: string; lastSeen: string | null }> {
     return this.getLastSeenFor(this.liveConfig.config());
   }
 
@@ -42,13 +42,13 @@ export class LiveApiService {
     });
   }
 
-  private getLastSeenFor(config: ApiConnectionConfig): Observable<{ serverTime: string; lastSeen: string }> {
+  private getLastSeenFor(config: ApiConnectionConfig): Observable<{ serverTime: string; lastSeen: string | null }> {
     if (config.demoMode) {
       const now = new Date().toISOString();
       return of({ serverTime: now, lastSeen: now }).pipe(delay(60));
     }
     const params = new HttpParams().set('meter_id', config.meterId);
-    return this.http.get<{ serverTime: string; lastSeen: string }>(this.url(config, config.lastSeenPath), { params, headers: this.headers(config) }).pipe(timeout(config.timeoutMs));
+    return this.http.get<{ serverTime: string; lastSeen: string | null }>(this.url(config, config.lastSeenPath), { params, headers: this.headers(config) }).pipe(this.withResilience(config));
   }
 
   private url(config: ApiConnectionConfig, path: string): string {
@@ -56,9 +56,22 @@ export class LiveApiService {
   }
 
   private headers(config: ApiConnectionConfig): HttpHeaders {
-    return config.authenticationMode === 'bearer' && config.bearerToken
+    return config.authenticationMode !== 'none' && config.bearerToken
       ? new HttpHeaders({ Authorization: `Bearer ${config.bearerToken}` })
       : new HttpHeaders();
+  }
+
+  private withResilience<T>(config: ApiConnectionConfig): MonoTypeOperatorFunction<T> {
+    return (source) => source.pipe(
+      timeout(config.timeoutMs),
+      retry({
+        count: config.retryCount,
+        delay: (_error, retryIndex) => timer(Math.min(
+          config.retryMaxDelayMs,
+          config.retryBaseDelayMs * 2 ** Math.max(0, retryIndex - 1),
+        )),
+      }),
+    );
   }
 
   private demoSnapshot(windowMinutes: number, bucketSeconds: number): LiveEnvelope {

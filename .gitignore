@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .angular/
+backend/build/
 .env
 *.local
 *.log

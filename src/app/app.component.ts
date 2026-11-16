@@ -237,7 +237,9 @@ export class AppComponent {
   readonly latestThds = computed(() => {
     const values = (this.store.state()?.voltage ?? [])
       .filter((point) => this.thdsPhase() === 'ALL' || point.phase === this.thdsPhase())
-      .slice(-3).map((point) => point.voltageThdsPercent);
+      .slice(-3)
+      .map((point) => point.voltageThdsPercent)
+      .filter((value): value is number => value !== null);
     return values.length ? Math.max(...values) : 0;
   });
 
@@ -274,12 +276,9 @@ export class AppComponent {
   }
 
   saveApiConfiguration(): void {
-    if (!this.configDraft.demoMode && !this.configDraft.baseUrl.trim()) {
-      this.configMessage.set({ tone: 'error', text: 'Für den Produktivbetrieb ist eine API-Basis-URL erforderlich.' });
-      return;
-    }
-    if (!this.configDraft.meterId.trim()) {
-      this.configMessage.set({ tone: 'error', text: 'Eine Messgerät-ID ist erforderlich.' });
+    const validationError = this.validateConfigDraft();
+    if (validationError) {
+      this.configMessage.set({ tone: 'error', text: validationError });
       return;
     }
     this.liveConfig.update({ ...this.configDraft });
@@ -300,6 +299,11 @@ export class AppComponent {
   }
 
   testApiConnection(): void {
+    const validationError = this.validateConfigDraft();
+    if (validationError) {
+      this.configMessage.set({ tone: 'error', text: validationError });
+      return;
+    }
     this.testingConnection.set(true);
     this.configMessage.set({ tone: 'info', text: 'Verbindung wird geprüft …' });
     this.liveApi.testConnection({ ...this.configDraft }).pipe(
@@ -317,6 +321,33 @@ export class AppComponent {
     return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
   }
   formatRate(milliseconds: number): string { return (milliseconds / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+  formatCursor(value: string | null | undefined): string {
+    if (!value) return '–';
+    return value.length > 24 ? `${value.slice(0, 10)}…${value.slice(-10)}` : value;
+  }
+  openIdConfigurationUrl(): string {
+    const issuer = this.configDraft.oauthIssuerUrl.trim().replace(/\/$/, '');
+    return issuer ? `${issuer}/.well-known/openid-configuration` : '–';
+  }
+
+  private validateConfigDraft(): string | null {
+    if (!this.configDraft.demoMode && !this.configDraft.baseUrl.trim()) {
+      return 'Für den Produktivbetrieb ist eine API-Basis-URL erforderlich.';
+    }
+    if (!this.configDraft.meterId.trim()) return 'Eine Messgerät-ID ist erforderlich.';
+    if (!this.configDraft.snapshotPath.trim() || !this.configDraft.updatesPath.trim() || !this.configDraft.lastSeenPath.trim()) {
+      return 'Snapshot-, Update- und Last-Seen-Endpunkt müssen gesetzt sein.';
+    }
+    if (!Number.isFinite(Number(this.configDraft.unansweredRequestLimit))
+      || this.configDraft.unansweredRequestLimit < 1
+      || this.configDraft.unansweredRequestLimit > 20) {
+      return 'Der Alarmgrenzwert für unbeantwortete Abrufe muss zwischen 1 und 20 liegen.';
+    }
+    if (this.configDraft.authenticationMode === 'oauth2' && (!this.configDraft.oauthIssuerUrl.trim() || !this.configDraft.oauthClientId.trim())) {
+      return 'Für OAuth 2.0 werden Issuer-URL und Client-ID benötigt.';
+    }
+    return null;
+  }
 
   private timeChartBase(series: unknown[], yName: string, min: number, max: number): EChartsOption {
     return {

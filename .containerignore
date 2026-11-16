@@ -1,0 +1,7 @@
+.git/
+.angular/
+dist/
+node_modules/
+.env
+*.log
+backend/build/
